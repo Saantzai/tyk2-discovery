@@ -1,0 +1,7 @@
+rdkit>=2024.3
+pandas>=2.0
+numpy>=1.26
+scikit-learn>=1.4
+lightgbm>=4.0
+matplotlib>=3.8
+chembl_webresource_client>=0.10
