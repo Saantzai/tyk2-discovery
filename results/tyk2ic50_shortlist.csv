@@ -1,0 +1,2 @@
+id,std_smiles,inchikey,mw,logp,hba,hbd,tpsa,rotb,pred_pIC50,nn_similarity,in_domain,novelty
+545704253,CNS(=O)(=O)c1ccc(-c2noc(-c3cc(OC)c(OC)c(OC)c3)n2)cc1,QMOXPKGYFDPPLV-UHFFFAOYSA-N,405.43200000000013,2.3375000000000004,8,1,112.78000000000002,7,6.53673572396422,0.53333336,True,distant (out of domain)
