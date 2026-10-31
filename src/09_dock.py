@@ -95,7 +95,7 @@ def write_pdbqt(mol, path: Path) -> bool:
 
 
 def run_vina(vina, receptor, ligand_pdbqt, out_pdbqt, box, exhaustiveness,
-             num_modes=9, seed=42, timeout=1800):
+             num_modes=9, seed=42, timeout=1800, scoring="vinardo"):
     cmd = [vina, "--receptor", str(receptor), "--ligand", str(ligand_pdbqt),
            "--out", str(out_pdbqt),
            "--center_x", str(box["center_x"]), "--center_y", str(box["center_y"]),
@@ -103,7 +103,8 @@ def run_vina(vina, receptor, ligand_pdbqt, out_pdbqt, box, exhaustiveness,
            "--size_x", str(box["size_x"]), "--size_y", str(box["size_y"]),
            "--size_z", str(box["size_z"]),
            "--exhaustiveness", str(exhaustiveness),
-           "--num_modes", str(num_modes), "--seed", str(seed), "--cpu", "1"]
+           "--num_modes", str(num_modes), "--seed", str(seed), "--cpu", "1",
+           "--scoring", scoring]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
         if r.returncode != 0:
@@ -140,15 +141,41 @@ def pose_coords(pdbqt: Path, model: int = 1):
     return np.array(xs)
 
 
-def symmetry_free_rmsd(a: np.ndarray, b: np.ndarray):
-    """Nearest-neighbour RMSD between two heavy-atom clouds. Crude compared
-    with a graph-matched RMSD, but it does not need atom correspondence and is
-    adequate for a pass/fail redocking check."""
-    if len(a) == 0 or len(b) == 0:
+def pose_rmsds(pose_pdbqt: Path, ref_sdf: Path):
+    """Symmetry-aware RMSD of every docked pose against the crystal pose.
+
+    This must use real atom correspondence. An earlier version matched each
+    atom to its nearest neighbour in the other structure, which needs no
+    correspondence but is not an RMSD: tested against a 180-degree flip whose
+    true RMSD was 10.6 A, it reported 2.35 A. Every pose looked acceptable.
+
+    Meeko reconstructs the docked molecule with its bond orders intact, and
+    RDKit's CalcRMS then resolves topological symmetry (equivalent ring
+    flips, rotatable terminal groups) before measuring - without
+    superimposing, since the question is where the pose sits in the pocket,
+    not whether its shape can be aligned onto the reference.
+    """
+    try:
+        from meeko import PDBQTMolecule, RDKitMolCreate
+        from rdkit.Chem import rdMolAlign
+    except ImportError:
         return None
-    d = np.linalg.norm(a[:, None, :] - b[None, :, :], axis=-1)
-    return float(np.sqrt(((d.min(axis=1) ** 2).mean() +
-                          (d.min(axis=0) ** 2).mean()) / 2))
+    try:
+        ref = Chem.RemoveHs(Chem.MolFromMolFile(str(ref_sdf), removeHs=False))
+        pm = PDBQTMolecule.from_file(str(pose_pdbqt), skip_typing=True)
+        mols = RDKitMolCreate.from_pdbqt_mol(pm)
+        if not mols or mols[0] is None:
+            return None
+        probe = Chem.RemoveHs(mols[0])
+        out = []
+        for cid in range(probe.GetNumConformers()):
+            try:
+                out.append(float(rdMolAlign.CalcRMS(probe, ref, prbId=cid, refId=0)))
+            except Exception:
+                out.append(float("nan"))
+        return out
+    except Exception:
+        return None
 
 
 def prepare_one(args):
@@ -163,14 +190,14 @@ def prepare_one(args):
 
 
 def dock_one(args):
-    cid, vina, receptor, box, exh = args
+    cid, vina, receptor, box, exh, scoring = args
     lig = LIGS / f"{cid}.pdbqt"
     out = POSES / f"{cid}_out.pdbqt"
     if out.exists() and out.stat().st_size > 100:
         sc = parse_scores(out)
         if sc:
             return cid, sc, None, True       # resumed
-    scores, err = run_vina(vina, receptor, lig, out, box, exh)
+    scores, err = run_vina(vina, receptor, lig, out, box, exh, scoring=scoring)
     return cid, scores, err, False
 
 
@@ -179,13 +206,22 @@ def main():
     ap.add_argument("--target", default="tyk2ic50")
     ap.add_argument("--vina", default=None)
     ap.add_argument("--n", type=int, default=2000, help="how many to dock")
-    ap.add_argument("--exhaustiveness", type=int, default=16)
+    ap.add_argument("--exhaustiveness", type=int, default=32,
+                    help="LB4 has 9 rotatable bonds; 16 under-samples it")
+    ap.add_argument("--scoring", default="vinardo",
+                    choices=["vinardo", "vina", "ad4_scoring"],
+                    help="Vinardo is the default because, on this target, "
+                         "Vina's own function ranked a flipped pose 10.5 A "
+                         "from the crystal structure above the correct one, "
+                         "while Vinardo ranked the correct pose first. "
+                         "Vinardo scores are NOT on the same scale as Vina's.")
     ap.add_argument("--jobs", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     ap.add_argument("--skip-redock", action="store_true")
     args = ap.parse_args()
 
     vina = find_vina(args.vina)
-    print(f"vina: {vina}")
+    print(f"vina: {vina}   scoring: {args.scoring}   "
+          f"exhaustiveness: {args.exhaustiveness}")
 
     box_path = DOCK / "box.json"
     receptor = DOCK / "receptor.pdbqt"
@@ -201,30 +237,50 @@ def main():
         print("\nredocking the crystallographic ligand to validate the setup ...")
         nat = Chem.MolFromMolFile(str(native_sdf), removeHs=False)
         if nat is not None:
-            ref = np.array([list(nat.GetConformer().GetAtomPosition(i))
-                            for i in range(nat.GetNumAtoms())
-                            if nat.GetAtomWithIdx(i).GetSymbol() != "H"])
             smi = Chem.MolToSmiles(Chem.RemoveHs(nat))
             m3d = embed_3d(smi)
             ok = m3d is not None and write_pdbqt(m3d, LIGS / "_native.pdbqt")
             if ok:
                 sc, err = run_vina(vina, receptor, LIGS / "_native.pdbqt",
                                    POSES / "_native_out.pdbqt", box,
-                                   args.exhaustiveness)
+                                   args.exhaustiveness, scoring=args.scoring)
                 if sc:
-                    rmsd = symmetry_free_rmsd(
-                        pose_coords(POSES / "_native_out.pdbqt"), ref)
-                    print(f"  best affinity {sc[0]:.2f} kcal/mol, "
-                          f"pose RMSD to crystal {rmsd:.2f} A")
-                    if rmsd is not None and rmsd > REDOCK_RMSD_LIMIT:
-                        raise SystemExit(
-                            f"\nRedocking RMSD {rmsd:.2f} A exceeds the "
-                            f"{REDOCK_RMSD_LIMIT} A limit. The box or the "
-                            f"receptor preparation is wrong - fix that before "
-                            f"docking anything else, or every score below is "
-                            f"meaningless. Override with --skip-redock only if "
-                            f"you intend to report this.")
-                    print("  setup validated.")
+                    rmsds = pose_rmsds(POSES / "_native_out.pdbqt", native_sdf)
+                    if not rmsds:
+                        print("  could not measure pose RMSD; continuing "
+                              "unvalidated")
+                    else:
+                        print(f"  {'rank':>5} {'affinity':>10} {'RMSD':>8}")
+                        for i, (a, r) in enumerate(zip(sc, rmsds), 1):
+                            mark = "  <- crystal pose" if r <= REDOCK_RMSD_LIMIT else ""
+                            print(f"  {i:>5} {a:>10.2f} {r:>8.2f}{mark}")
+                        top = rmsds[0]
+                        best = min(rmsds)
+                        best_rank = rmsds.index(best) + 1
+                        print(f"\n  top-ranked pose : {top:.2f} A")
+                        print(f"  best of {len(rmsds)} poses : {best:.2f} A "
+                              f"(rank {best_rank}, "
+                              f"{sc[best_rank-1] - sc[0]:+.2f} kcal/mol vs top)")
+                        if top > REDOCK_RMSD_LIMIT and best > REDOCK_RMSD_LIMIT:
+                            raise SystemExit(
+                                f"\nNo pose reproduces the crystal structure "
+                                f"within {REDOCK_RMSD_LIMIT} A (best "
+                                f"{best:.2f} A). The setup cannot find the "
+                                f"known binding mode, so docking scores from "
+                                f"it carry no weight. Try a larger box "
+                                f"(--padding in 08) or higher "
+                                f"--exhaustiveness before continuing.")
+                        if top > REDOCK_RMSD_LIMIT:
+                            print(f"\n  PARTIAL PASS: the crystal pose is found "
+                                  f"but ranked {best_rank}, not first. Vina's "
+                                  f"scoring prefers a different pose by "
+                                  f"{sc[0] - sc[best_rank-1]:.2f} kcal/mol. "
+                                  f"Pose ranking for this target is therefore "
+                                  f"unreliable - report ranking by score with "
+                                  f"that caveat, and inspect top poses by eye.")
+                        else:
+                            print("\n  PASS: top-ranked pose reproduces the "
+                                  "crystal structure.")
                 else:
                     print(f"  redocking failed ({err}); continuing unvalidated")
     # ---- shortlist -------------------------------------------------------
@@ -246,7 +302,8 @@ def main():
           f"(exhaustiveness {args.exhaustiveness}) ...")
     t0 = time.time()
     rows, done, resumed, failed = [], 0, 0, 0
-    tasks = [(c, vina, receptor, box, args.exhaustiveness) for c in prepared]
+    tasks = [(c, vina, receptor, box, args.exhaustiveness, args.scoring)
+             for c in prepared]
     out_csv = RESULTS / f"{args.target}_docking.csv"
 
     with cf.ThreadPoolExecutor(max_workers=args.jobs) as ex:
@@ -282,8 +339,9 @@ def main():
             print(f"    {r['id']:<18} {r['vina_best']:>7.2f}  "
                   f"pred pIC50 {r['pred_pIC50']:.2f}  {r['novelty']}")
     print(f"\nwritten -> results/{out_csv.name}")
-    print("\nNOTE: a Vina score is not a binding affinity. Use it to rank and "
-          "to triage, never as a predicted potency.")
+    print(f"\nNOTE: a docking score is not a binding affinity. Use it to rank "
+          f"and triage, never as a predicted potency. These are {args.scoring} "
+          f"scores and are not comparable with scores from another function.")
 
 
 if __name__ == "__main__":

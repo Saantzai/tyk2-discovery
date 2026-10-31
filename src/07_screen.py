@@ -302,11 +302,18 @@ def main():
     # compound is a close analogue of known chemistry: safest for the model,
     # weakest as a discovery claim. Flag it rather than silently presenting
     # it as novel.
+    # Novelty bands are anchored to the MEASURED domain threshold, not to
+    # fixed numbers. With hardcoded edges a compound at 0.53 was labelled
+    # "distant (out of domain)" while simultaneously passing a 0.52 domain
+    # test - two parts of the same output contradicting each other.
+    edges = [-0.01, threshold, threshold + 0.20, 0.95, 1.0, 1.01]
+    labels = ["outside domain", "novel scaffold", "related analogue",
+              "close analogue of known compound",
+              "fingerprint-identical to a training compound"]
     for frame in (lib, short):
-        frame["novelty"] = pd.cut(
-            frame["nn_similarity"], [-0.01, 0.55, 0.75, 0.85, 1.01],
-            labels=["distant (out of domain)", "novel scaffold",
-                    "related analogue", "close analogue of known compound"])
+        # right=False so a compound exactly at the threshold counts as inside
+        frame["novelty"] = pd.cut(frame["nn_similarity"], edges, labels=labels,
+                                  right=False, include_lowest=True)
     n_novel = int((short["novelty"] == "novel scaffold").sum())
     n_close = int((short["novelty"] == "close analogue of known compound").sum())
 

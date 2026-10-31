@@ -5,3 +5,4 @@ vina.exe
 data/library/
 data/docking/
 results/*_screen_all.csv
+results/libB_property_matched_screen.csv
