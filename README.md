@@ -4,8 +4,9 @@ A ligand-based screening pipeline for TYK2, built end to end: ChEMBL curation,
 QSAR modelling with honest validation, a measured applicability domain, and
 molecular docking with a redocking gate and a positive-control test.
 
-The deliverable is a ranked list of 20 candidate compounds. The more useful
-results are three findings about the method, two of which are negative.
+The deliverable is 23 candidate compounds. The more useful results are four
+findings about the method, three of which are negative — and the same failure
+mode appears in three independent places.
 
 ---
 
@@ -70,6 +71,57 @@ only to exclude compounds that cannot occupy the pocket, never to rank.
 
 ---
 
+## Selectivity: the filter was biased toward compounds nobody measured
+
+Models were built for JAK1 (7,758 compounds), JAK2 and JAK3, and each candidate
+scored on the margin between predicted TYK2 activity and best JAK activity.
+Because the library came from ChEMBL kinase actives, **984 of 1,991 candidates
+have a measured JAK1 value** rather than a predicted one.
+
+Re-ranking on selectivity kept only **5 of the top 20**. Several high-potency
+candidates have measured JAK1 activity *above* their predicted TYK2 activity —
+CHEMBL4109943 at JAK1 pIC50 10.30 (margin −1.75). Those are potent JAK1
+inhibitors, not selective compounds.
+
+Then the ranking itself turned out to be biased:
+
+| | Worst JAK **measured** | Worst JAK **predicted** |
+|---|---|---|
+| Candidates | 891 | 1,100 |
+| Appear TYK2-selective | 79 (**8.9%**) | 212 (**19.3%**) |
+| Median margin | −0.95 | −0.50 |
+| JAK1 value range | 4.51–10.64 | 5.54–9.40 |
+
+Compounds look **twice as selective when the JAK activity was predicted**. That
+is prediction compression, not biology: the JAK models never predict above
+9.40 while measurement reaches 10.64, so an unmeasured compound appears
+selective by default. Apparent selectivity concentrates where the evidence is
+weakest.
+
+Honest estimate from the measured subset: **~9% are plausibly TYK2-selective**,
+best margin 1.28 log units — modest, against the orders of magnitude
+deucravacitinib achieves.
+
+## ADMET, and a flag that flagged everything
+
+The 79 measurement-backed candidates were scored with ADMET-AI. The **DILI
+model fired on 96% of them** (median probability 0.90). A flag that fires on
+nearly everything separates nothing — counting it would have rejected the whole
+set while saying nothing about any member. It is reported per compound and
+excluded from the count under a stated rule: any flag firing on ≥90% of the set
+is non-discriminative on this chemistry.
+
+That is the **third appearance of the same failure mode**: the JAK models
+compressed toward the mean, the docking scores failed to separate actives from
+decoys, and the DILI model calls almost everything hepatotoxic. A model applied
+outside its training distribution produces confident output that does not
+discriminate — and each time the output looked normal until tested against
+something known.
+
+**Final answer: 23 compounds with no informative liability flag**, led by
+CHEMBL4110316 — margin +1.28, predicted TYK2 pIC50 8.36, hERG 0.19, QED 0.87,
+predicted half-life 13.8 h.
+
 ## Candidates, and their problem
 
 20 compounds, ranked by predicted pIC50, all inside the validated domain.
@@ -94,6 +146,23 @@ This is a **repurposing hypothesis**, not a novel-compound claim.
 
 ---
 
+## Scripts
+
+| File | Purpose |
+|---|---|
+| `01_fetch_chembl.py` | Retrieve bioactivity records |
+| `02_curate.py` | Standardise, deduplicate, write attrition table |
+| `03_eda.py` | Property distributions, scaffolds, activity cliffs |
+| `04_baseline_model.py` | Train and evaluate on random, scaffold, external splits |
+| `05_split_diagnostics.py` | Test split representativeness and external bias |
+| `06_get_library.py` | Probe ZINC tranche properties, build a matched library |
+| `06b_get_kinase_library.py` | Build the kinase-focused library from ChEMBL |
+| `07_screen.py` | Calibrate applicability domain, predict, select shortlist |
+| `08_prepare_receptor.py` | Prepare receptor, assign ligand bond orders |
+| `09_dock.py` | Redocking gate, then dock the shortlist |
+| `10_selectivity.py` | JAK1/2/3 models, measured-first selectivity margin |
+| `11_admet.py` | ADMET liabilities, with non-discriminative flag detection |
+
 ## Reproducing
 
 ```bash
@@ -108,6 +177,8 @@ python src/06b_get_kinase_library.py
 python src/07_screen.py --target tyk2ic50 --library data/library/kinase_focused.smi
 python src/08_prepare_receptor.py
 python src/09_dock.py --target tyk2ic50 --n 2000
+python src/10_selectivity.py --target tyk2ic50
+python src/11_admet.py --target tyk2ic50
 ```
 
 Docking additionally needs [AutoDock Vina
@@ -145,9 +216,10 @@ ground truth.
 
 ## Next
 
-1. Train JAK1/2/3 models and rank on selectivity margin rather than TYK2
-   potency. This addresses the central weakness directly.
-2. ADMET prediction on the final candidates.
+1. Experimental validation — nothing here has been tested, and the top
+   candidates are purchasable.
+2. Measure JAK2/JAK3 activity for the candidates where it is currently
+   predicted; the selectivity estimate depends on it.
 3. Optional: Chemprop GNN benchmarked against the fingerprint baseline.
 
 ---

@@ -1,0 +1,9 @@
+step,rows,unique_compounds
+0. raw records from ChEMBL,1167,1089
+1. drop ChEMBL validity-flagged,1146,1072
+2. drop missing SMILES or value,1146,1072
+3. drop non-numeric / non-positive values,1146,1072
+4. RDKit standardisation + organic-element filter,1146,1072
+5. MW window 150-900 Da,1146,1072
+6. deduplicate by InChIKey (median pActivity),1068,1068
+7. drop irreconcilable replicates >2.0 log units (25 of the remainder flagged >1.0),1056,1056
