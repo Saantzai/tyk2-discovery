@@ -4,7 +4,7 @@ A ligand-based screening pipeline for TYK2, built end to end: ChEMBL curation,
 QSAR modelling with honest validation, a measured applicability domain, and
 molecular docking with a redocking gate and a positive-control test.
 
-The deliverable is 23 candidate compounds. The more useful results are four
+The deliverable is 23 candidate compounds. The more useful results are five
 findings about the method, three of which are negative — and the same failure
 mode appears in three independent places.
 
@@ -51,7 +51,19 @@ The 0.52 threshold is **measured, not assumed**: scaffolds were held out five
 times, error binned by similarity to the nearest training compound, and the
 threshold read off where RMSE falls below a stated 0.85 log unit tolerance.
 
-### 3. Docking reproduced the crystal pose but could not rank actives
+### 3. The model passes Y-randomisation
+
+Shuffle the activity labels, retrain, and the signal should vanish. It does:
+
+| | Real labels | Scrambled |
+|---|---|---|
+| RMSE | **0.688 ± 0.056** | 1.060 ± 0.037 |
+| Spearman | **+0.704 ± 0.055** | −0.007 ± 0.060 |
+
+Twenty scrambled runs, range −0.104 to +0.095, none near the real +0.704. The
+model is learning structure-activity relationship, not scaffold clustering.
+
+### 4. Docking reproduced the crystal pose but could not rank actives
 
 Redocking the co-crystallised ligand of PDB 6NZQ placed the top pose **1.94 Å**
 from experiment with Vinardo scoring — the only pose under 6 Å.
@@ -65,6 +77,19 @@ The same setup then failed a positive-control test:
 | Potent controls (pIC50 ≥ 8, n = 7) in top decile | **0 of 7** |
 | Docking score vs true pIC50 (controls) | Spearman +0.32 (wrong direction) |
 | Docking score vs QSAR prediction | Spearman +0.12 (disagreement) |
+
+Quantified against property-matched decoys (20 per active, matched on MW,
+logP, TPSA, H-bond counts, rotatable bonds, heavy atoms):
+
+| Metric | Matched decoys | Random expectation |
+|---|---|---|
+| ROC-AUC | **0.564** | 0.500 |
+| EF at 1% | **0.00×** | 1.00× |
+| EF at 5% | 0.60× | 1.00× |
+| EF at 10% | 0.91× | 1.00× |
+
+Enrichment below 1.0 means known actives are slightly *under*-represented at
+the top of the ranking. None of the 33 appears in the top 1%.
 
 Pose prediction works; affinity ranking does not. Docking is therefore used
 only to exclude compounds that cannot occupy the pocket, never to rank.
@@ -162,6 +187,7 @@ This is a **repurposing hypothesis**, not a novel-compound claim.
 | `09_dock.py` | Redocking gate, then dock the shortlist |
 | `10_selectivity.py` | JAK1/2/3 models, measured-first selectivity margin |
 | `11_admet.py` | ADMET liabilities, with non-discriminative flag detection |
+| `12_validation.py` | Y-randomisation and docking enrichment controls |
 
 ## Reproducing
 
@@ -179,6 +205,7 @@ python src/08_prepare_receptor.py
 python src/09_dock.py --target tyk2ic50 --n 2000
 python src/10_selectivity.py --target tyk2ic50
 python src/11_admet.py --target tyk2ic50
+python src/12_validation.py --target tyk2ic50
 ```
 
 Docking additionally needs [AutoDock Vina
