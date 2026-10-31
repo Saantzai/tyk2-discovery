@@ -8,6 +8,8 @@ The deliverable is 23 candidate compounds. The more useful results are five
 findings about the method, three of which are negative — and the same failure
 mode appears in three independent places.
 
+![Apparent selectivity is concentrated in the compounds nobody measured](figures/selectivity_illusion.png)
+
 ---
 
 ## Findings
@@ -188,12 +190,22 @@ This is a **repurposing hypothesis**, not a novel-compound claim.
 | `10_selectivity.py` | JAK1/2/3 models, measured-first selectivity margin |
 | `11_admet.py` | ADMET liabilities, with non-discriminative flag detection |
 | `12_validation.py` | Y-randomisation and docking enrichment controls |
+| `13_figure.py` | The headline figure |
 
 ## Reproducing
 
 ```bash
 pip install -r requirements.txt
+python run_all.py                 # every stage not already done
+```
 
+`run_all.py --list` shows the stages and what is complete. Stages needing the
+network or the Vina binary are skipped with an explanation rather than a
+traceback. From nothing it is several hours, nearly all of it docking.
+
+Stage by stage:
+
+```bash
 python src/01_fetch_chembl.py --target ALL
 python src/02_curate.py --target tyk2ic50
 python src/03_eda.py --target tyk2ic50
@@ -216,6 +228,26 @@ Bulk intermediates (screening libraries, full screen outputs, docking poses)
 are gitignored — the scripts regenerate them.
 
 ---
+
+## What this pipeline refuses to do
+
+Each of these was added after something looked fine and wasn't.
+
+- **Dock without passing a redocking gate.** If the crystal ligand's pose is
+  not reproduced within 2 Å, it stops rather than producing 2,000
+  confident-looking scores from a broken setup.
+- **Screen a library it cannot parse.** Every tranche's first SMILES is
+  validated with RDKit before 250,000 lines are written, and the screener
+  probes 50 entries before committing to a run.
+- **Delete a residue near the binding site.** Incomplete crystal residues are
+  removed only after checking each one's distance to the ligand; anything
+  within 6 Å halts the run.
+- **Count a flag that fires on almost everything.** A liability flag hitting
+  ≥90% of the set is reported per compound and excluded from the count, with
+  the exclusion stated.
+- **Report a selectivity margin without saying where it came from.** Every JAK
+  value is labelled measured or predicted, because the distinction turned out
+  to matter more than the number.
 
 ## Three bugs worth knowing about
 
@@ -250,6 +282,17 @@ ground truth.
 3. Optional: Chemprop GNN benchmarked against the fingerprint baseline.
 
 ---
+
+## Built with
+
+Built with AI assistance (Claude). The scientific decisions, the controls and
+the interpretation are mine, and I can account for each of them: why 6NZQ over
+other TYK2 structures, why Vinardo over Vina's default scoring, why the DILI
+flag was excluded from the liability count.
+
+What I would change on a rebuild: a proper decoy set from the start rather than
+opportunistic positive controls, and JAK selectivity modelled before the
+potency ranking rather than after it.
 
 ## Data
 
